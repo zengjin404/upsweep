@@ -3,6 +3,7 @@
 //! 阶段 1 增加只读扫描与元数据采集；仍不包含风险分类、清理计划或任何文件修改操作。
 //! 命令层只做编排，文件系统/Windows API 访问集中在独立模块。
 
+pub mod analyzer;
 pub mod commands;
 pub mod config;
 pub mod database;
@@ -40,6 +41,7 @@ pub fn run() {
             commands::scan::get_scan_report,
             commands::scan::is_scan_active,
             commands::scan::get_installed_software,
+            commands::analyze::analyze_scan,
         ])
         .run(tauri::generate_context!());
 

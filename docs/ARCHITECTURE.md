@@ -50,7 +50,7 @@ Windows 文件系统 / Windows API / SQLite
 | `signature/` | 1 | WinVerifyTrust 状态 + Authenticode 发布者 | 已实现 |
 | `software/` | 1 | 卸载注册表只读采集 | 已实现 |
 | `protection/` | 1 | 路径规范化、组件边界、受保护路径、reparse point | 已实现 |
-| `analyzer/` | 3 | 规则约束的风险分类与理由 | 预留 |
+| `analyzer/` | 2 | 软件关联、可解释风险分类与理由 | 已实现 |
 | `planner/` | 5 | 清理计划生成与预览 | 预留 |
 | `directory/` | 5 | 孤立目录分析与自底向上计划 | 预留 |
 | `cleaner/` | 6 | 执行前复核、回收站操作、部分失败处理 | 预留 |
@@ -75,6 +75,22 @@ Vue（阶段 4 才接入）
       → scan-progress / scan-candidate 事件
   → scan-finished(ScanReport)
   → ScanManager 保留最近报告；cancel_scan 设置原子取消令牌
+```
+
+### 阶段 2 风险判断数据流
+
+```text
+analyze_scan(sessionId)
+  → ScanManager 取 ScanReport
+  → software::read_installed_software（只读卸载注册表）
+  → analyzer::matching
+      → 产品名称/发布者/签名发布者/安装路径/ProductCode 关联
+      → 版本比较、冲突/歧义标记
+  → analyzer::rules
+      → 受保护路径、活动更新器、更新器组件、软件安装目录硬保护
+      → 安装包特征、软件归属置信度、版本关系、签名、占用状态
+      → Recommended / NeedsConfirmation / NotRecommended + 理由
+  → RiskReport（不生成清理计划）
 ```
 
 ## 4. 阶段 0 数据流

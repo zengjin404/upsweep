@@ -5,10 +5,15 @@
 
 mod error;
 mod reports;
+mod risk;
 mod scan;
 
 pub use error::AppError;
 pub use reports::{AppInfo, DatabaseCheckReport, WindowsApiCheck, WindowsProbeReport};
+pub use risk::{
+    FileUsageStatus, IdentityConfidence, RiskAssessment, RiskEvidence, RiskLevel, RiskReason,
+    RiskReport, RiskSummary, SoftwareMatch, VersionRelation,
+};
 pub use scan::{
     ChainStatus, DirectoryContext, DirectorySummary, DiscoveryEvidence, FileIdentity, FileInfo,
     InstalledSoftware, InstalledSoftwareReport, LogLevel, MetadataIssue, MsiMetadata,

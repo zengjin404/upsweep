@@ -2,8 +2,8 @@
 
 Windows 软件升级残留清理器。用于发现软件自动更新后遗留的旧安装包、升级包与孤立目录，并在充分展示证据、用户确认后执行清理。
 
-> **当前状态：阶段 1（扫描引擎与元数据采集）已完成，等待验收。**
-> 已实现预设/自定义/排除目录扫描、安全目录遍历、PE 版本资源、Authenticode 状态、MSI/MSP 元数据、已安装软件只读读取、进度/取消/结构化日志。**未实现**风险分类、清理计划或任何文件删除/移动操作。扫描 UI 属于后续阶段。
+> **当前状态：阶段 2（风险判断引擎）已完成，等待验收。**
+> 在阶段 1 扫描结果之上实现可解释风险分类：推荐清理、需要确认、不建议清理。**未实现**清理计划、文件移动、删除、回收站或目录清理。扫描/结果 UI 属于后续阶段。
 
 ## 技术栈
 
@@ -143,6 +143,7 @@ upsweep/
 │   │   ├── metadata/             # PE 版本资源、MSI/MSP
 │   │   ├── signature/            # Authenticode 状态与发布者
 │   │   ├── software/             # 已安装软件注册表只读读取
+│   │   ├── analyzer/             # 风险判断：软件关联、规则、证据
 │   │   ├── protection/           # 路径边界、受保护路径、重解析点
 │   │   ├── models/               # 前后端数据契约与错误类型
 │   │   ├── utils/                # Windows API / 时间封装
@@ -161,6 +162,27 @@ upsweep/
 ```
 
 标记为「预留」的目录目前只有 `.gitkeep`，用于保持手册规定的模块边界；不会提前放入空实现。
+
+## 阶段 2 风险判断
+
+| 等级 | 默认行为 | 主要条件 |
+| --- | --- | --- |
+| 推荐清理 | 默认勾选 | 高置信度归属 + 强安装包信号 + 旧版本 + 未占用 + 非保护/非活动更新器/非安装目录/非更新目录 + 无冲突/补丁/回滚 |
+| 需要确认 | 默认不勾选 | 更新目录、补丁/回滚、未登记更新器、归属不足/冲突、同/新版本、签名异常、占用未知、弱证据 |
+| 不建议清理 | 不可选择 | 受保护路径、活动更新器、更新器自身、软件主安装目录、文件占用、普通文件 |
+
+验证结果：
+
+| 验证项 | 结果 |
+| --- | --- |
+| Rust 常规测试 | 92 个通过（45 单元 + 26 分析器 + 19 扫描 + 2 其他） |
+| `cargo fmt` / `cargo clippy --all-targets -- -D warnings` | 通过 |
+| 真实 EdgeUpdate 分析 | 14 个候选全部“不建议清理”；0 推荐、0 需要确认 |
+| 夹具无已安装软件记录 | PixPin 安装包/MSI 判为“需要确认”，不推荐 |
+| Tauri IPC | `analyze_scan` 正常返回风险报告，控制台 0 错误 |
+| Release 构建 | `tauri build --no-bundle` 通过，`upsweep.exe` 6,944,256 字节，启动正常 |
+| NTFS 目录级大小写敏感 | 检测并保守跳过，避免 PathKey 折叠 |
+| PathKey vs CompareStringOrdinal | 覆盖大小写、中文/日文/特殊字符、UNC/长路径的对照测试通过 |
 
 ## 阶段 1 验证结果
 
@@ -185,6 +207,7 @@ upsweep/
 | `get_scan_report` | 获取已完成会话的报告 |
 | `is_scan_active` | 查询会话是否仍在运行 |
 | `get_installed_software` | 只读读取已安装软件 |
+| `analyze_scan` | 对已完成扫描报告执行风险判断 |
 
 事件：`scan-progress`、`scan-candidate`、`scan-finished`、`scan-error`。
 
@@ -226,13 +249,16 @@ Windows：C:\Windows、C:\Windows\system32、kernel32.dll 属性读取通过
 - 候选 ID 是路径身份的 SHA-256 截断值，不是文件身份；`FileIdentity` 单独记录卷序列号与文件 ID，供后续清理前复核。
 - Authenticode 按 SignerIdentifier 匹配叶证书；匹配不到时不猜测发布者，并区分签名存在、结构、信任、证书链与诊断原因。
 - 保护 Windows、System32、WinSxS、Installer、SoftwareDistribution、DriverStore、ProgramData\Microsoft、Package Cache、WindowsApps、回收站、系统卷信息等位置。
-- 文件名、目录名、扩展名、大小、时间只作为发现证据；本阶段没有风险等级或推荐清理。
+- 文件名、目录名、扩展名、大小、时间只作为发现证据；风险分类必须多证据组合。
+- 风险等级不是删除授权：推荐项仍需后端复核和用户确认；本阶段没有清理入口。
+- 活动更新器目录、更新器自身、软件安装目录、受保护路径、文件占用均硬性保护。
 - 后续清理功能必须遵循 [DEVELOPMENT.md](DEVELOPMENT.md) 的安全要求。
 
 ## 文档
 
 - [阶段 0 实施记录](docs/PHASE-0.md)
 - [阶段 1 实施记录](docs/PHASE-1.md)
+- [阶段 2 实施记录](docs/PHASE-2.md)
 - [架构说明](docs/ARCHITECTURE.md)
 - [测试说明](docs/TESTING.md)
 - [开发环境记录](docs/ENVIRONMENT.md)

@@ -171,6 +171,7 @@ pub struct ScanTotals {
     pub skipped_protected: u64,
     pub skipped_excluded: u64,
     pub skipped_max_depth: u64,
+    pub skipped_case_sensitive: u64,
     pub errors: u64,
     pub warnings: u64,
 }

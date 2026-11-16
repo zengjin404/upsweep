@@ -22,6 +22,13 @@
   - Windows 卸载注册表只读采集（HKLM 64/32 视图、HKCU）。
   - 路径边界、受保护目录、reparse point 防护。
   - 扫描集成测试、性能测试与独立夹具。
+- 阶段 2：风险判断引擎（2026-11-16）。
+  - 候选与已安装软件关联（产品、发布者、签名发布者、安装路径、MSI ProductCode）。
+  - 可解释风险等级：推荐清理 / 需要确认 / 不建议清理。
+  - 受保护路径、活动更新器、更新器组件、软件安装目录硬保护。
+  - 文件占用启发式、版本关系、签名状态、元数据冲突与缺失处理。
+  - `analyze_scan` Tauri 命令与 `RiskReport` 数据结构。
+  - NTFS 目录级大小写敏感目录检测与保守跳过。
 
 ### Verification
 
@@ -40,6 +47,7 @@
 - 阶段 1：59 个常规 Rust 测试通过；Clippy/fmt 通过；真实 Tauri IPC 扫描与已安装软件读取通过；release 构建通过（`upsweep.exe` 6,855,168 字节）。
 - 阶段 1 性能基线（debug，合成目录）：201 个目录、1,250 个文件、250 个候选，约 322–641 ms（1,949–3,877 文件/秒）。
 - 阶段 1 真实目录只读扫描：EdgeUpdate 16 目录 / 109 文件 / 14 候选，PE 14/14，签名 14/14 有效，0 issue，约 1.03 s，取消响应 6–22 ms。
+- 阶段 2：92 个常规 Rust 测试通过（45 单元 + 47 集成）；Clippy/fmt 通过；真实 EdgeUpdate 14 个候选全部“不建议清理”；`analyze_scan` IPC 验证通过；release `upsweep.exe` 6,944,256 字节，启动正常。
 
 ### Known issues
 
@@ -48,3 +56,4 @@
 - LongPathsEnabled 未启用。
 - NSIS/MSI 安装包打包尚未验证（release 二进制已构建并启动验证）。
 - 阶段 1 尚未实现扫描 UI；Authenticode 按 SignerIdentifier 匹配叶证书（SubjectKeyIdentifier 暂不支持），MSI 发布者优先使用 Manufacturer；WinVerifyTrust 不进行网络吊销检查。
+- 阶段 2 风险判断为静态启发式：无法确定更新是否完成；活动更新器依赖已知路径/已安装记录；文件占用不能列出进程；NTFS 目录级大小写敏感目录被保守跳过；未实现目录级清理计划。

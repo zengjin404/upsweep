@@ -635,6 +635,65 @@ fn inaccessible_directory_is_recorded_and_scan_continues() {
 }
 
 #[test]
+fn case_sensitive_directory_is_skipped_conservatively() {
+    let root = temp_root("case_sensitive");
+    let normal = root.join("normal").join("updater");
+    let sensitive = root.join("sensitive");
+    fs::create_dir_all(&normal).expect("应创建普通目录");
+    fs::create_dir_all(&sensitive).expect("应创建大小写敏感目录");
+    fs::copy(
+        fixture("metadata").join("versioned.exe"),
+        normal.join("installer.exe"),
+    )
+    .expect("应复制普通夹具");
+
+    let enabled = Command::new("fsutil")
+        .args(["file", "setCaseSensitiveInfo"])
+        .arg(&sensitive)
+        .arg("enable")
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if !enabled {
+        eprintln!("当前环境无法启用目录级大小写敏感，跳过该用例");
+        let _ = fs::remove_dir_all(&root);
+        return;
+    }
+    let sensitive_updater = sensitive.join("updater");
+    fs::create_dir_all(&sensitive_updater).expect("应创建敏感目录子目录");
+    fs::copy(
+        fixture("metadata").join("versioned.exe"),
+        sensitive_updater.join("installer.exe"),
+    )
+    .expect("应复制敏感目录夹具");
+
+    let report = run_scan(
+        &root,
+        Vec::new(),
+        &engine::NoopObserver,
+        &ScanControl::new(),
+    );
+    assert_eq!(report.status, ScanStatus::Completed);
+    assert!(has_candidate(&report, r"normal\updater\installer.exe"));
+    assert!(
+        !report
+            .candidates
+            .iter()
+            .any(|candidate| candidate.file.path.contains(r"\sensitive\updater\")),
+        "大小写敏感目录应保守跳过，避免路径键折叠"
+    );
+    assert!(report.totals.skipped_case_sensitive >= 1);
+    assert!(
+        report
+            .log
+            .iter()
+            .any(|event| event.event == "case_sensitive_directory_skipped")
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn long_path_can_be_scanned() {
     let root = temp_root("longpath");
     let mut deep = root.clone();

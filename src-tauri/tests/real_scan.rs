@@ -8,8 +8,10 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use upsweep_lib::analyzer;
 use upsweep_lib::models::{ScanRequest, ScanStatus, SignatureStatus};
 use upsweep_lib::scanner::{ScanControl, engine, prepare};
+use upsweep_lib::software;
 use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
@@ -148,6 +150,29 @@ fn real_install_directory_read_only_scan() {
         after.WorkingSetSize as f64 / 1024.0 / 1024.0,
         after.PeakWorkingSetSize as f64 / 1024.0 / 1024.0,
     );
+
+    let software_report = software::read_installed_software();
+    let risk = analyzer::analyze(&report, &software_report);
+    println!(
+        "REAL_RISK total={} recommended={} needs_confirmation={} not_recommended={}",
+        risk.summary.total,
+        risk.summary.recommended,
+        risk.summary.needs_confirmation,
+        risk.summary.not_recommended
+    );
+    for assessment in &risk.assessments {
+        println!(
+            "REAL_RISK_ITEM file={} level={:?} active_updater={} updater_component={} match={:?}",
+            assessment.file_name,
+            assessment.risk_level,
+            assessment.evidence.active_updater,
+            assessment.evidence.updater_component,
+            assessment
+                .matched_software
+                .as_ref()
+                .map(|value| value.display_name.as_str())
+        );
+    }
 
     // 取消响应：真实目录上启动第二次只读扫描，短暂延迟后取消并等待 join。
     let cancel_plan = prepare(request(&root)).expect("准备取消测试计划");

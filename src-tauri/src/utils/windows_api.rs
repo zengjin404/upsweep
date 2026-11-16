@@ -12,13 +12,17 @@ use std::fmt;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_READ, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, GetFileAttributesW, GetFileInformationByHandle, INVALID_FILE_ATTRIBUTES,
-    OPEN_EXISTING,
+    BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_CASE_SENSITIVE_INFO,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileCaseSensitiveInfo,
+    GetFileAttributesW, GetFileInformationByHandle, GetFileInformationByHandleEx,
+    INVALID_FILE_ATTRIBUTES, OPEN_EXISTING,
 };
+
+/// `FILE_CS_FLAG_CASE_SENSITIVE_DIR`（Win32 SystemServices 常量）。
+const FILE_CS_FLAG_CASE_SENSITIVE_DIR: u32 = 1;
 use windows_sys::Win32::System::SystemInformation::{GetSystemDirectoryW, GetWindowsDirectoryW};
 
 use crate::models::{WindowsApiCheck, WindowsProbeReport};
@@ -174,6 +178,96 @@ pub fn file_identity(path: &Path) -> FileIdentityInfo {
         file_id: Some((u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow)),
         read_error: None,
     }
+}
+
+/// 查询目录是否启用了 NTFS 目录级大小写敏感（需要 Windows 10 1803+）。
+///
+/// 查询失败时不改变扫描比较语义；扫描器会把失败记录为警告，并继续使用
+/// Windows 默认的大小写不敏感路径键。
+pub fn is_case_sensitive_directory(path: &Path) -> Result<bool, WindowsApiError> {
+    let wide_path = to_wide_null(path);
+    // SAFETY: 路径为 NUL 结尾；目录使用 FILE_FLAG_BACKUP_SEMANTICS；
+    // 只请求属性访问，句柄在函数内关闭。
+    let handle = unsafe {
+        CreateFileW(
+            wide_path.as_ptr(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(WindowsApiError {
+            operation: "CreateFileW",
+            message: format!("{}: {}", path.display(), std::io::Error::last_os_error()),
+        });
+    }
+
+    let mut info = FILE_CASE_SENSITIVE_INFO::default();
+    // SAFETY: handle 有效；info 是有效可写结构，大小与 API 要求一致。
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            handle,
+            FileCaseSensitiveInfo,
+            (&mut info as *mut FILE_CASE_SENSITIVE_INFO).cast::<core::ffi::c_void>(),
+            std::mem::size_of::<FILE_CASE_SENSITIVE_INFO>() as u32,
+        )
+    };
+    // SAFETY: handle 由 CreateFileW 成功返回，且只关闭一次。
+    unsafe {
+        CloseHandle(handle);
+    }
+
+    if ok == 0 {
+        return Err(WindowsApiError {
+            operation: "GetFileInformationByHandleEx(FileCaseSensitiveInfo)",
+            message: format!("{}: {}", path.display(), std::io::Error::last_os_error()),
+        });
+    }
+    Ok(info.Flags & FILE_CS_FLAG_CASE_SENSITIVE_DIR != 0)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileUsageInfo {
+    NotInUse,
+    InUse,
+    Unknown(String),
+}
+
+/// 以独占方式尝试打开文件，用于启发式判断文件是否被占用。
+///
+/// 共享冲突（ERROR_SHARING_VIOLATION）视为可能正在使用；权限不足或其他错误
+/// 返回 Unknown。该接口不能列出占用进程，也不能证明文件绝对未被使用。
+pub fn file_usage(path: &Path) -> FileUsageInfo {
+    let wide_path = to_wide_null(path);
+    // SAFETY: 路径为 NUL 结尾；请求只读访问，不写入；句柄在函数内关闭。
+    let handle = unsafe {
+        CreateFileW(
+            wide_path.as_ptr(),
+            GENERIC_READ,
+            0,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        let error = std::io::Error::last_os_error();
+        return if error.raw_os_error() == Some(32) {
+            FileUsageInfo::InUse
+        } else {
+            FileUsageInfo::Unknown(error.to_string())
+        };
+    }
+    // SAFETY: handle 由 CreateFileW 成功返回，且只关闭一次。
+    unsafe {
+        CloseHandle(handle);
+    }
+    FileUsageInfo::NotInUse
 }
 
 pub(crate) fn to_wide_null(path: &Path) -> Vec<u16> {
@@ -332,6 +426,15 @@ mod tests {
         assert!(report.windows_directory.is_some());
         assert!(report.system_directory.is_some());
         assert!(report.probe_file.is_some());
+    }
+
+    #[test]
+    fn normal_temp_directory_is_not_case_sensitive() {
+        let path = std::env::temp_dir();
+        match is_case_sensitive_directory(&path) {
+            Ok(value) => assert!(!value, "普通临时目录默认应为大小写不敏感"),
+            Err(error) => eprintln!("当前文件系统不支持目录大小写敏感查询: {error}"),
+        }
     }
 
     #[test]

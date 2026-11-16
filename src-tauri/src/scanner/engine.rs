@@ -77,6 +77,7 @@ struct Stats {
     skipped_protected: AtomicU64,
     skipped_excluded: AtomicU64,
     skipped_depth: AtomicU64,
+    skipped_case_sensitive: AtomicU64,
     errors: AtomicU64,
     warnings: AtomicU64,
     roots_read: AtomicU64,
@@ -451,6 +452,7 @@ pub fn run(plan: &ScanPlan, control: &ScanControl, observer: &dyn ScanObserver) 
             skipped_protected: Stats::get(&stats.skipped_protected),
             skipped_excluded: Stats::get(&stats.skipped_excluded),
             skipped_max_depth: Stats::get(&stats.skipped_depth),
+            skipped_case_sensitive: Stats::get(&stats.skipped_case_sensitive),
             errors: Stats::get(&stats.errors),
             warnings: Stats::get(&stats.warnings),
         },
@@ -638,6 +640,32 @@ fn traverse(
                     Some(canonical.to_string_lossy().into_owned()),
                 );
                 continue;
+            }
+
+            // NTFS 目录级大小写敏感与 Windows 默认大小写不敏感语义不同。
+            // 当前 PathKey 是大小写不敏感的；为免把两个不同文件折叠成同一身份，
+            // 保守地跳过该目录（漏判优先，不误判）。
+            match crate::utils::windows_api::is_case_sensitive_directory(&canonical) {
+                Ok(true) => {
+                    Stats::inc(&stats.skipped_case_sensitive);
+                    collector.log(
+                        LogLevel::Warn,
+                        "case_sensitive_directory_skipped",
+                        format!(
+                            "跳过启用目录级大小写敏感的目录（当前 PathKey 不折叠此类路径）: {}",
+                            canonical.display()
+                        ),
+                        Some(canonical.to_string_lossy().into_owned()),
+                    );
+                    continue;
+                }
+                Ok(false) => {}
+                Err(error) => collector.log(
+                    LogLevel::Warn,
+                    "case_sensitive_check_failed",
+                    format!("无法查询目录大小写敏感状态，继续使用默认大小写不敏感语义: {error}"),
+                    Some(canonical.to_string_lossy().into_owned()),
+                ),
             }
 
             let read_dir = match fs::read_dir(&canonical) {

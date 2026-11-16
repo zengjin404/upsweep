@@ -124,7 +124,8 @@ ScanRequest
    - 所有路径先绝对化，目录再 `canonicalize`。
    - 受保护/排除判定使用 `PathKey` 组件键 + 组件边界，不用字符串前缀；`C:\Program Files Backup` 不属于 `C:\Program Files`。
    - 大小写语义统一使用 Windows `LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE)`；路径规范化、边界比较、排除/受保护判断、visited 集合与候选 ID 共用同一规则。
-   - `PathKey` 支持盘符路径、UNC、`\\?\`/`\\?\UNC\`、`\\.\`、长路径、中文/日文/特殊字符；测试覆盖大小写变体。
+   - `PathKey` 支持盘符路径、UNC、`\\?\`/`\\?\UNC\`、`\\.\`、长路径、中文/日文/特殊字符；测试覆盖大小写变体，并与 `CompareStringOrdinal` 对照。
+   - NTFS 目录级大小写敏感目录通过 `GetFileInformationByHandleEx(FileCaseSensitiveInfo)` 检测，扫描时保守跳过并计入 `skippedCaseSensitive`，避免大小写不敏感键折叠不同文件。
 
 2. **受保护目录**
    - `C:\Windows` 及其 `System32`、`WinSxS`、`Installer`、`SoftwareDistribution`、`SystemApps`、`System32\DriverStore`。

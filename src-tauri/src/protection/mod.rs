@@ -578,6 +578,43 @@ mod tests {
     }
 
     #[test]
+    fn path_key_agrees_with_compare_string_ordinal() {
+        use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
+
+        fn ordinal_equal(left: &str, right: &str) -> bool {
+            let left: Vec<u16> = left.encode_utf16().collect();
+            let right: Vec<u16> = right.encode_utf16().collect();
+            // SAFETY: 两个指针和长度均有效；bIgnoreCase=TRUE。
+            let result = unsafe {
+                CompareStringOrdinal(
+                    left.as_ptr(),
+                    left.len() as i32,
+                    right.as_ptr(),
+                    right.len() as i32,
+                    1,
+                )
+            };
+            result == CSTR_EQUAL
+        }
+
+        for (left, right) in [
+            (r"C:\Program Files", r"c:\program files"),
+            (r"C:\ÄÖÜ\应用", r"C:\äöü\应用"),
+            (r"C:\中文\テスト", r"C:\中文\テスト"),
+            (r"C:\ß", r"C:\SS"),
+            (r"C:\İ", r"C:\i"),
+            (r"C:\Program Files", r"C:\Program Files Backup"),
+        ] {
+            assert_eq!(
+                path_key(Path::new(left)).expect("left key")
+                    == path_key(Path::new(right)).expect("right key"),
+                ordinal_equal(left, right),
+                "PathKey 与 CompareStringOrdinal 应一致: {left} / {right}"
+            );
+        }
+    }
+
+    #[test]
     fn path_key_handles_long_paths() {
         let long = format!(r"C:\{}", "segment_".repeat(45));
         let key = path_key(Path::new(&long)).expect("长路径应生成键");

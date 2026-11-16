@@ -4,8 +4,8 @@
 
 | 层级 | 位置 | 命令 | 当前状态 |
 | --- | --- | --- | --- |
-| Rust 单元测试 | `src-tauri/src/**/mod.rs` 内的 `#[cfg(test)]` | `npm run test:rust` | 通过：39 个 |
-| Rust 集成测试 | `src-tauri/tests/`（数据库 1 + 扫描 18 + Windows API 1） | `npm run test:rust` | 通过：20 个 |
+| Rust 单元测试 | `src-tauri/src/**/mod.rs` 内的 `#[cfg(test)]` | `npm run test:rust` | 通过：45 个 |
+| Rust 集成测试 | `src-tauri/tests/`（数据库 1 + 扫描 19 + 分析 26 + Windows API 1） | `npm run test:rust` | 通过：47 个 |
 | 性能测量（可选） | `src-tauri/tests/performance.rs` | 见下文 | 默认 ignored，按需运行 |
 | 前端单元测试 | `src/**/*.test.js` | `npm test` | 通过：3 个 |
 | 桌面运行时验证 | 技术验证页 + 扫描命令 | `npm run tauri dev` | 通过：IPC 扫描、已安装软件、0 控制台错误 |
@@ -42,9 +42,10 @@ cargo test --manifest-path src-tauri/Cargo.toml --test performance -- --ignored 
 - `protection/mod.rs`：组件边界、大小写语义、中文/日文/特殊字符、UNC/verbatim、长路径、盘符根、受保护根、重解析点、词法规范化。
 - `utils/windows_api.rs`：文件身份（卷序列号/文件 ID）稳定且大小写路径一致。
 - `signature/mod.rs`：未签名、自签名、篡改签名、损坏 PE、受信任系统二进制；叶证书按 SignerIdentifier 匹配。
-- `tests/scanner.rs`：18 个独立夹具集成测试（含大小写/Unicode 路径、硬链接身份区分）。
+- `tests/analyzer.rs`：26 个风险判断用例（旧/新/同版本、更新目录/独立目录、有效/无效/无签名、补丁/回滚、未登记更新器、相似路径、Update Service 元数据、活动更新器、更新器组件、安装目录、占用/Unknown/权限不足/受保护路径、卸载残留、发布者/产品冲突、MSI ProductCode 冲突、多软件歧义、元数据缺失/损坏）。
+- `tests/scanner.rs`：19 个独立夹具集成测试（含大小写/Unicode 路径、硬链接身份区分、大小写敏感目录跳过）。
 - `tests/performance.rs`：合成目录吞吐量（默认 ignored）。
-- `tests/real_scan.rs`：真实软件目录只读性能/资源/取消测量（默认 ignored）。
+- `tests/real_scan.rs`：真实软件目录只读性能/资源/取消测量，并执行风险判断（默认 ignored）。
 
 阶段 0 覆盖：
 
@@ -116,6 +117,12 @@ TypeError: Cannot read properties of undefined (reading 'config')
 - MSI 候选：`PixPin_2.0.0.3.msi`，ProductName=PixPin，ProductVersion=2.0.0.3。
 - `get_installed_software`：282 条、330 个卸载键、0 issue。
 - 控制台错误：0。
+
+阶段 2 追加验证：
+
+- 夹具 `software-b`：2 个候选均“需要确认”（本机无 PixPin 安装记录），默认不勾选。
+- 真实 EdgeUpdate：14 个候选全部“不建议清理”，`activeUpdater=true`，0 推荐、0 需要确认。
+- `analyze_scan` 命令通过 Tauri IPC 返回完整 `RiskReport`，控制台 0 错误。
 
 临时调试配置只用于本地验证，不写入项目的 `tauri.conf.json`。生产构建不启用远程调试端口。
 
