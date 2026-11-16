@@ -2,8 +2,8 @@
 
 Windows 软件升级残留清理器。用于发现软件自动更新后遗留的旧安装包、升级包与孤立目录，并在充分展示证据、用户确认后执行清理。
 
-> **当前状态：阶段 0（项目初始化与技术验证）已完成。**
-> 桌面窗口、前后端通信、SQLite 基本读写、Windows API 调用与 Rust 测试均已实际运行通过。阶段 0 不包含任何文件扫描或删除功能。
+> **当前状态：阶段 1（扫描引擎与元数据采集）已完成，等待验收。**
+> 已实现预设/自定义/排除目录扫描、安全目录遍历、PE 版本资源、Authenticode 状态、MSI/MSP 元数据、已安装软件只读读取、进度/取消/结构化日志。**未实现**风险分类、清理计划或任何文件删除/移动操作。扫描 UI 属于后续阶段。
 
 ## 技术栈
 
@@ -16,6 +16,8 @@ Windows 软件升级残留清理器。用于发现软件自动更新后遗留的
 | 后端 | Rust |
 | 本地数据库 | SQLite（rusqlite 0.41，bundled） |
 | 系统接口 | Windows API（windows-sys 0.61，独立封装） |
+| PE 元数据 | Windows version.dll + `authenticode` / `object` 解析 |
+| MSI/MSP | `msi` 0.11 纯 Rust 解析（不执行安装包） |
 
 ## 环境要求
 
@@ -123,7 +125,7 @@ npm run tauri build
 upsweep/
 ├── src/                          # Vue 前端
 │   ├── components/common/        # 通用组件
-│   ├── views/                    # 页面（阶段 0：技术验证页）
+│   ├── views/                    # 页面（当前：技术验证页；扫描 UI 待阶段 4）
 │   ├── services/                 # Tauri 命令调用封装
 │   ├── styles/                   # Less 变量与全局样式
 │   ├── utils/                    # 前端纯函数与测试
@@ -134,16 +136,20 @@ upsweep/
 │   └── main.js
 ├── src-tauri/
 │   ├── src/
-│   │   ├── commands/             # Tauri 命令入口（system / diagnostics）
+│   │   ├── commands/             # Tauri 命令（system / diagnostics / scan）
 │   │   ├── config/               # 常量与路径解析
 │   │   ├── database/             # SQLite 连接、迁移、自检
+│   │   ├── scanner/              # 扫描计划、遍历、候选发现、会话管理
+│   │   ├── metadata/             # PE 版本资源、MSI/MSP
+│   │   ├── signature/            # Authenticode 状态与发布者
+│   │   ├── software/             # 已安装软件注册表只读读取
+│   │   ├── protection/           # 路径边界、受保护路径、重解析点
 │   │   ├── models/               # 前后端数据契约与错误类型
-│   │   ├── utils/                # Windows API 安全封装
-│   │   ├── {scanner,discovery,metadata,signature,software,
-│   │   │    analyzer,planner,cleaner,directory,protection,rules,history}/  # 预留
+│   │   ├── utils/                # Windows API / 时间封装
+│   │   ├── {analyzer,planner,cleaner,directory,rules,history}/  # 预留
 │   │   ├── lib.rs
 │   │   └── main.rs
-│   ├── tests/                    # Rust 集成测试
+│   ├── tests/                    # Rust 集成测试（scanner / performance 等）
 │   ├── capabilities/
 │   ├── icons/                    # 当前为脚手架占位图标
 │   └── tauri.conf.json
@@ -156,7 +162,33 @@ upsweep/
 
 标记为「预留」的目录目前只有 `.gitkeep`，用于保持手册规定的模块边界；不会提前放入空实现。
 
-## 阶段 0 验证结果
+## 阶段 1 验证结果
+
+| 验证项 | 结果 |
+| --- | --- |
+| Rust 单元测试 | 39 个通过 |
+| 扫描引擎集成测试 | 18 个通过（含 junction/symlink/循环、长路径、无权限目录、取消、大小写/Unicode 路径、硬链接身份） |
+| 其他集成测试 | 数据库 1 个、Windows API 1 个，通过 |
+| `cargo fmt --check` / `cargo clippy --all-targets -- -D warnings` | 通过 |
+| 真实 Tauri IPC 扫描 | `software-b` 夹具：3 个目录、3 个文件、2 个候选；PE + MSI 元数据正确；控制台 0 错误 |
+| 已安装软件读取 | 282 条，扫描 330 个卸载键，0 issue |
+| 真实目录只读扫描 | EdgeUpdate：16 目录 / 109 文件 / 14 候选；PE 14/14；签名 14/14 有效；0 issue；约 1.03 s；取消响应 6–22 ms |
+| 性能基线（debug） | 1,250 文件 / 250 候选，约 322–641 ms（1,949–3,877 文件/秒）；冷缓存/负载会影响结果 |
+| Release 构建 | `tauri build --no-bundle` 通过，`upsweep.exe` 6,855,168 字节，启动正常 |
+
+阶段 1 的扫描命令：
+
+| 命令 | 说明 |
+| --- | --- |
+| `start_scan` | 创建扫描会话并后台执行；返回 session ID |
+| `cancel_scan` | 取消指定会话 |
+| `get_scan_report` | 获取已完成会话的报告 |
+| `is_scan_active` | 查询会话是否仍在运行 |
+| `get_installed_software` | 只读读取已安装软件 |
+
+事件：`scan-progress`、`scan-candidate`、`scan-finished`、`scan-error`。
+
+## 阶段 0 验证结果（历史）
 
 | 验证项 | 结果 |
 | --- | --- |
@@ -188,16 +220,22 @@ Windows：C:\Windows、C:\Windows\system32、kernel32.dll 属性读取通过
 
 ## 安全边界
 
-- 阶段 0 不扫描、不修改、不删除任何用户软件目录。
-- Windows API 探测仅读取系统目录和 `kernel32.dll` 的属性。
-- SQLite 自检只操作应用自己的数据目录，并在同一事务内删除测试键。
-- 后续清理功能必须遵循 [DEVELOPMENT.md](DEVELOPMENT.md) 的安全要求，默认使用回收站，默认仅勾选推荐项。
+- 阶段 1 只读扫描：不修改文件、不写注册表、不执行安装包、不移动/删除/回收站。
+- 不跟随 symlink、junction 或其他 reparse point。
+- 路径校验使用规范化路径与组件边界，不使用字符串前缀；大小写语义统一通过 Windows `LCMapStringEx` invariant 大写实现，覆盖盘符/UNC/verbatim/长路径/中文路径。
+- 候选 ID 是路径身份的 SHA-256 截断值，不是文件身份；`FileIdentity` 单独记录卷序列号与文件 ID，供后续清理前复核。
+- Authenticode 按 SignerIdentifier 匹配叶证书；匹配不到时不猜测发布者，并区分签名存在、结构、信任、证书链与诊断原因。
+- 保护 Windows、System32、WinSxS、Installer、SoftwareDistribution、DriverStore、ProgramData\Microsoft、Package Cache、WindowsApps、回收站、系统卷信息等位置。
+- 文件名、目录名、扩展名、大小、时间只作为发现证据；本阶段没有风险等级或推荐清理。
+- 后续清理功能必须遵循 [DEVELOPMENT.md](DEVELOPMENT.md) 的安全要求。
 
 ## 文档
 
 - [阶段 0 实施记录](docs/PHASE-0.md)
+- [阶段 1 实施记录](docs/PHASE-1.md)
 - [架构说明](docs/ARCHITECTURE.md)
 - [测试说明](docs/TESTING.md)
+- [开发环境记录](docs/ENVIRONMENT.md)
 - [开发手册](DEVELOPMENT.md)
 
 ## 许可证

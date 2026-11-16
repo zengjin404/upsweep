@@ -38,6 +38,12 @@
 | Vitest | 4.1.12 |
 | rusqlite | 0.41.1（bundled SQLite 3.54.1） |
 | windows-sys（直接依赖） | 0.61.2 |
+| authenticode | 0.6.0（features: object, std） |
+| object | 0.39.1（pe/read_core/unaligned，no default features） |
+| msi | 0.11.1 |
+| cms | 0.2.3 |
+| x509-cert | 0.2.5 |
+| sha2 | 0.10.9 |
 
 Tauri 2.12 要求 Rust 1.90+；`Cargo.toml` 已声明 `rust-version = "1.90"`。Rust crate 与 npm 包必须保持同主/次版本。
 

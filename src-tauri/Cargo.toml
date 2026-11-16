@@ -22,13 +22,32 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 # SQLite 随应用静态编译，避免依赖用户机器上的系统级 SQLite。
 rusqlite = { version = "0.41", features = ["bundled"] }
+# 只解析 PE 签名结构；签名链信任状态由 Windows WinVerifyTrust 判定。
+authenticode = { version = "0.6", features = ["object", "std"] }
+object = { version = "0.39", default-features = false, features = [
+  "pe",
+  "read_core",
+  "unaligned",
+] }
+# 纯 Rust 读取 MSI/MSP 数据库，不执行安装包。
+msi = "0.11"
+# 候选路径身份与签名证书匹配。
+sha2 = "0.10"
+cms = "0.2"
+x509-cert = "0.2"
 
 # Windows 原生 API 仅在 Windows 目标上编译；调用统一封装在 src/utils/windows_api.rs。
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
+  "Win32_Globalization",
+  "Win32_Security_Cryptography",
+  "Win32_Security_WinTrust",
   "Win32_Storage_FileSystem",
+  "Win32_System_ProcessStatus",
+  "Win32_System_Registry",
   "Win32_System_SystemInformation",
+  "Win32_System_Threading",
 ] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

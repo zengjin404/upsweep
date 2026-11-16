@@ -4,4 +4,5 @@
 //! 必须委托给底层模块，便于独立测试和后续安全复核。
 
 pub mod diagnostics;
+pub mod scan;
 pub mod system;

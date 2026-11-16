@@ -12,8 +12,12 @@ use std::fmt;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
+use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_ATTRIBUTE_DIRECTORY, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
+    BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, GetFileAttributesW, GetFileInformationByHandle, INVALID_FILE_ATTRIBUTES,
+    OPEN_EXISTING,
 };
 use windows_sys::Win32::System::SystemInformation::{GetSystemDirectoryW, GetWindowsDirectoryW};
 
@@ -107,7 +111,72 @@ pub fn is_directory(path: &Path) -> Result<bool, WindowsApiError> {
     Ok(file_attributes(path)? & FILE_ATTRIBUTE_DIRECTORY != 0)
 }
 
-fn to_wide_null(path: &Path) -> Vec<u16> {
+/// 只读文件身份信息：卷序列号与文件 ID，用于后续清理前复核。
+#[derive(Debug, Clone)]
+pub struct FileIdentityInfo {
+    pub volume_serial: Option<u32>,
+    pub file_id: Option<u64>,
+    pub read_error: Option<String>,
+}
+
+/// 以 FILE_READ_ATTRIBUTES 打开文件并读取卷序列号/文件 ID。
+///
+/// 使用 `FILE_FLAG_OPEN_REPARSE_POINT`，不会跟随重解析点；调用方仍应在
+/// 扫描阶段先拒绝重解析点。失败只返回错误信息，不影响扫描任务。
+pub fn file_identity(path: &Path) -> FileIdentityInfo {
+    let wide_path = to_wide_null(path);
+    // SAFETY: 路径为 NUL 结尾；不请求写权限；句柄在函数内关闭。
+    let handle = unsafe {
+        CreateFileW(
+            wide_path.as_ptr(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return FileIdentityInfo {
+            volume_serial: None,
+            file_id: None,
+            read_error: Some(format!(
+                "CreateFileW({}) 失败: {}",
+                path.display(),
+                std::io::Error::last_os_error()
+            )),
+        };
+    }
+
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: handle 有效；info 是有效可写结构。
+    let ok = unsafe { GetFileInformationByHandle(handle, &mut info) };
+    // SAFETY: handle 由 CreateFileW 成功返回，且只关闭一次。
+    unsafe {
+        CloseHandle(handle);
+    }
+
+    if ok == 0 {
+        return FileIdentityInfo {
+            volume_serial: None,
+            file_id: None,
+            read_error: Some(format!(
+                "GetFileInformationByHandle({}) 失败: {}",
+                path.display(),
+                std::io::Error::last_os_error()
+            )),
+        };
+    }
+
+    FileIdentityInfo {
+        volume_serial: Some(info.dwVolumeSerialNumber),
+        file_id: Some((u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow)),
+        read_error: None,
+    }
+}
+
+pub(crate) fn to_wide_null(path: &Path) -> Vec<u16> {
     path.as_os_str()
         .encode_wide()
         .chain(std::iter::once(0))
@@ -263,5 +332,29 @@ mod tests {
         assert!(report.windows_directory.is_some());
         assert!(report.system_directory.is_some());
         assert!(report.probe_file.is_some());
+    }
+
+    #[test]
+    fn file_identity_is_stable_and_case_insensitive() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("tests")
+            .join("fixtures")
+            .join("metadata")
+            .join("versioned.exe");
+        let first = file_identity(&path);
+        assert!(first.read_error.is_none(), "{:?}", first.read_error);
+        assert!(first.volume_serial.is_some());
+        assert!(first.file_id.is_some());
+
+        let second = file_identity(&path);
+        assert_eq!(first.volume_serial, second.volume_serial);
+        assert_eq!(first.file_id, second.file_id);
+
+        let uppercase = std::path::PathBuf::from(path.to_string_lossy().to_uppercase());
+        let upper = file_identity(&uppercase);
+        assert!(upper.read_error.is_none(), "{:?}", upper.read_error);
+        assert_eq!(first.volume_serial, upper.volume_serial);
+        assert_eq!(first.file_id, upper.file_id);
     }
 }

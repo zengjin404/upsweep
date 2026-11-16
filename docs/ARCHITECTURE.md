@@ -42,22 +42,40 @@ Windows 文件系统 / Windows API / SQLite
 
 ## 3. 预留模块与阶段对应
 
-| 目录 | 计划阶段 | 职责 | 当前状态 |
+| 目录 | 阶段 | 职责 | 当前状态 |
 | --- | --- | --- | --- |
-| `scanner/` | 1 | 扫描根、递归遍历、进度、取消、权限错误 | 仅目录占位 |
-| `discovery/` | 1–3 | 目录/文件名/扩展名/大小/时间多特征候选发现 | 仅目录占位 |
-| `metadata/` | 2 | PE Version Information 读取 | 仅目录占位 |
-| `signature/` | 2 | Authenticode 信息 | 仅目录占位 |
-| `software/` | 2 | 已安装软件信息（卸载注册表项） | 仅目录占位 |
-| `analyzer/` | 3 | 规则约束的风险分类与理由 | 仅目录占位 |
-| `planner/` | 5 | 清理计划生成与预览 | 仅目录占位 |
-| `directory/` | 5 | 孤立目录分析与自底向上计划 | 仅目录占位 |
-| `protection/` | 5–6 | 路径规范化、系统保护边界、重解析点检查 | 仅目录占位 |
-| `cleaner/` | 6 | 执行前复核、回收站操作、部分失败处理 | 仅目录占位 |
-| `rules/` | 3 | 外部 JSON 规则加载、校验、版本 | 仅目录占位；根目录 `rules/` 见其 README |
-| `history/` | 7 | 扫描/清理历史 | 仅目录占位 |
+| `scanner/` | 1 | 扫描计划、遍历、候选调度、进度、取消、会话管理 | 已实现 |
+| `scanner/discovery.rs` | 1 | 目录/文件名/版本号/扩展名多特征候选发现 | 已实现 |
+| `metadata/` | 1 | PE Version Information、MSI/MSP 元数据 | 已实现 |
+| `signature/` | 1 | WinVerifyTrust 状态 + Authenticode 发布者 | 已实现 |
+| `software/` | 1 | 卸载注册表只读采集 | 已实现 |
+| `protection/` | 1 | 路径规范化、组件边界、受保护路径、reparse point | 已实现 |
+| `analyzer/` | 3 | 规则约束的风险分类与理由 | 预留 |
+| `planner/` | 5 | 清理计划生成与预览 | 预留 |
+| `directory/` | 5 | 孤立目录分析与自底向上计划 | 预留 |
+| `cleaner/` | 6 | 执行前复核、回收站操作、部分失败处理 | 预留 |
+| `rules/` | 3 | 外部 JSON 规则加载、校验、版本 | 预留；根目录 `rules/` 见其 README |
+| `history/` | 7 | 扫描/清理历史 | 预留 |
 
-模块目录中的 `.gitkeep` 只用于保留目录，不代表已经实现。不得把空实现接入命令注册表。
+预留目录中的 `.gitkeep` 只用于保留目录，不代表已经实现。不得把空实现接入命令注册表。
+
+### 阶段 1 扫描数据流
+
+```text
+Vue（阶段 4 才接入）
+  → start_scan(ScanRequest)
+  → scanner::plan::prepare
+      → 预设/自定义根解析
+      → 受保护路径 + 排除目录
+      → MetadataOptions / maxDepth / 并发度
+  → 后台线程 scanner::engine::run
+      → 迭代遍历（canonicalize + visited + reparse 检查）
+      → scanner::discovery 候选证据
+      → 有界队列 → 元数据 worker（PE / 签名 / MSI）
+      → scan-progress / scan-candidate 事件
+  → scan-finished(ScanReport)
+  → ScanManager 保留最近报告；cancel_scan 设置原子取消令牌
+```
 
 ## 4. 阶段 0 数据流
 

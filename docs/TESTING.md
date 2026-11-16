@@ -4,10 +4,11 @@
 
 | 层级 | 位置 | 命令 | 当前状态 |
 | --- | --- | --- | --- |
-| Rust 单元测试 | `src-tauri/src/**/mod.rs` 内的 `#[cfg(test)]` | `npm run test:rust` | 通过：7 个 |
-| Rust 集成测试 | `src-tauri/tests/` | `npm run test:rust` | 通过：2 个 |
+| Rust 单元测试 | `src-tauri/src/**/mod.rs` 内的 `#[cfg(test)]` | `npm run test:rust` | 通过：39 个 |
+| Rust 集成测试 | `src-tauri/tests/`（数据库 1 + 扫描 18 + Windows API 1） | `npm run test:rust` | 通过：20 个 |
+| 性能测量（可选） | `src-tauri/tests/performance.rs` | 见下文 | 默认 ignored，按需运行 |
 | 前端单元测试 | `src/**/*.test.js` | `npm test` | 通过：3 个 |
-| 桌面运行时验证 | 技术验证页 | `npm run tauri dev` | 通过：3 个命令、0 控制台错误 |
+| 桌面运行时验证 | 技术验证页 + 扫描命令 | `npm run tauri dev` | 通过：IPC 扫描、已安装软件、0 控制台错误 |
 
 ## 2. Rust 测试
 
@@ -16,6 +17,34 @@ npm run test:rust
 # 等价于：
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
+
+真实目录只读测量（可选，默认扫描本机 EdgeUpdate，可用 `UPSWEEP_REAL_SCAN_ROOT` 指定）：
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml --test real_scan -- --ignored --nocapture
+```
+
+性能测量（可选）：
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml --test performance -- --ignored --nocapture
+```
+
+阶段 1 覆盖：
+
+- `scanner/plan.rs`：预设/自定义根、排除、受保护根拒绝（通过 protection 测试）。
+- `scanner/discovery.rs`：目录名、文件名、版本号、普通 EXE、扩展名单独不足。
+- `scanner/engine.rs`：updater 目录候选、MSI/MSP、排除、损坏 EXE、进度事件、取消、junction、symlink、长路径、无权限目录。
+- `metadata/pe_version.rs`：版本资源存在/缺失。
+- `metadata/msi.rs`：安装包、补丁包、损坏文件。
+- `signature/mod.rs`：未签名、自签名（可解析但不信任）、损坏 PE。
+- `software/mod.rs`：ProductCode 识别、真实注册表只读容错。
+- `protection/mod.rs`：组件边界、大小写语义、中文/日文/特殊字符、UNC/verbatim、长路径、盘符根、受保护根、重解析点、词法规范化。
+- `utils/windows_api.rs`：文件身份（卷序列号/文件 ID）稳定且大小写路径一致。
+- `signature/mod.rs`：未签名、自签名、篡改签名、损坏 PE、受信任系统二进制；叶证书按 SignerIdentifier 匹配。
+- `tests/scanner.rs`：18 个独立夹具集成测试（含大小写/Unicode 路径、硬链接身份区分）。
+- `tests/performance.rs`：合成目录吞吐量（默认 ignored）。
+- `tests/real_scan.rs`：真实软件目录只读性能/资源/取消测量（默认 ignored）。
 
 阶段 0 覆盖：
 
@@ -80,6 +109,14 @@ TypeError: Cannot read properties of undefined (reading 'config')
 - `probe_windows_api`：`GetWindowsDirectoryW`、`GetSystemDirectoryW`、`GetFileAttributesW` 全部通过。
 - 页面控制台错误：0。
 
+阶段 1 追加验证（同一方式）：
+
+- `start_scan`：自定义根 `tests/fixtures/software-b`，status=completed，3 个目录、3 个文件、2 个候选。
+- PE 候选：`PixPin_2.0.0.3.exe`，ProductName=UpSweep Fixture，签名状态 notSigned。
+- MSI 候选：`PixPin_2.0.0.3.msi`，ProductName=PixPin，ProductVersion=2.0.0.3。
+- `get_installed_software`：282 条、330 个卸载键、0 issue。
+- 控制台错误：0。
+
 临时调试配置只用于本地验证，不写入项目的 `tauri.conf.json`。生产构建不启用远程调试端口。
 
 ## 5. 测试夹具安全规则
@@ -90,7 +127,7 @@ TypeError: Cannot read properties of undefined (reading 'config')
 - 测试文件应为专门生成的无害文件；安装包形态的夹具可以是占位内容，但不得实际执行。
 - 涉及文件移动/回收站的测试必须在阶段 6 前建立独立临时目录，并在测试后清理。
 
-`tests/fixtures/` 目前只有说明文件，阶段 1 开始按 [DEVELOPMENT.md 第 12.1 节](../DEVELOPMENT.md) 建立模拟软件目录。
+`tests/fixtures/` 已包含阶段 1 的模拟软件目录、版本资源 PE、无版本 PE、自签名 PE、损坏 PE、MSI/MSP。Junction、Symbolic Link、长路径、无权限目录在测试运行时于临时目录生成，不提交到仓库。
 
 ## 6. 后续必须覆盖的测试
 
