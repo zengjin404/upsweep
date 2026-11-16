@@ -1,0 +1,267 @@
+//! Windows 原生 API 的安全封装。
+//!
+//! 业务模块不得直接调用 `unsafe` FFI。阶段 0 只封装路径与文件属性查询，
+//! 用于验证 Windows API 调用链路；文件删除、回收站等接口将在阶段 6 按手册要求
+//! 单独实现并测试，禁止提前引入。
+//!
+//! 本阶段调用的 API：
+//! - `GetWindowsDirectoryW` / `GetSystemDirectoryW`：获取系统目录，验证路径解析。
+//! - `GetFileAttributesW`：读取文件属性，验证文件系统元数据访问。
+
+use std::fmt;
+use std::os::windows::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
+
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_ATTRIBUTE_DIRECTORY, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
+};
+use windows_sys::Win32::System::SystemInformation::{GetSystemDirectoryW, GetWindowsDirectoryW};
+
+use crate::models::{WindowsApiCheck, WindowsProbeReport};
+
+/// `GetWindowsDirectoryW` 文档中的常规缓冲区大小（MAX_PATH）。
+const INITIAL_PATH_BUFFER: usize = 260;
+
+#[derive(Debug, Clone)]
+pub struct WindowsApiError {
+    operation: &'static str,
+    message: String,
+}
+
+impl fmt::Display for WindowsApiError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{} 调用失败: {}", self.operation, self.message)
+    }
+}
+
+impl std::error::Error for WindowsApiError {}
+
+fn last_error(operation: &'static str) -> WindowsApiError {
+    WindowsApiError {
+        operation,
+        message: std::io::Error::last_os_error().to_string(),
+    }
+}
+
+/// 调用返回系统路径的 Win32 API，并正确处理缓冲区不足的情况。
+///
+/// API 返回值为不含终止符的字符数；缓冲区不足时返回所需大小。
+fn query_system_path<F>(operation: &'static str, mut call: F) -> Result<PathBuf, WindowsApiError>
+where
+    F: FnMut(*mut u16, u32) -> u32,
+{
+    let mut buffer = vec![0u16; INITIAL_PATH_BUFFER];
+    let mut length = call(buffer.as_mut_ptr(), buffer.len() as u32);
+
+    if length == 0 {
+        return Err(last_error(operation));
+    }
+
+    if length as usize >= buffer.len() {
+        buffer.resize(length as usize + 1, 0);
+        length = call(buffer.as_mut_ptr(), buffer.len() as u32);
+        if length == 0 {
+            return Err(last_error(operation));
+        }
+        if length as usize >= buffer.len() {
+            return Err(WindowsApiError {
+                operation,
+                message: "系统返回的路径长度超出缓冲区".to_string(),
+            });
+        }
+    }
+
+    let end = buffer
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(length as usize);
+    Ok(PathBuf::from(String::from_utf16_lossy(&buffer[..end])))
+}
+
+pub fn windows_directory() -> Result<PathBuf, WindowsApiError> {
+    query_system_path("GetWindowsDirectoryW", |buffer, length| unsafe {
+        GetWindowsDirectoryW(buffer, length)
+    })
+}
+
+pub fn system_directory() -> Result<PathBuf, WindowsApiError> {
+    query_system_path("GetSystemDirectoryW", |buffer, length| unsafe {
+        GetSystemDirectoryW(buffer, length)
+    })
+}
+
+/// 读取路径的 `FILE_ATTRIBUTE_*` 标志位。路径不存在或无权限时返回错误。
+pub fn file_attributes(path: &Path) -> Result<u32, WindowsApiError> {
+    let wide_path = to_wide_null(path);
+    // SAFETY: `wide_path` 以 NUL 结尾并保持存活直到调用返回；API 不保留该指针。
+    let attributes = unsafe { GetFileAttributesW(wide_path.as_ptr()) };
+
+    if attributes == INVALID_FILE_ATTRIBUTES {
+        Err(last_error("GetFileAttributesW"))
+    } else {
+        Ok(attributes)
+    }
+}
+
+pub fn is_directory(path: &Path) -> Result<bool, WindowsApiError> {
+    Ok(file_attributes(path)? & FILE_ATTRIBUTE_DIRECTORY != 0)
+}
+
+fn to_wide_null(path: &Path) -> Vec<u16> {
+    path.as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+/// 执行一组最小 Windows API 探测。
+///
+/// 单项失败不会中断其余调用，结果逐项返回给前端，便于定位环境问题。
+pub fn probe() -> WindowsProbeReport {
+    let mut checks = Vec::new();
+
+    let windows_dir = match windows_directory() {
+        Ok(path) => {
+            let is_dir = is_directory(&path).unwrap_or(false);
+            checks.push(WindowsApiCheck {
+                name: "GetWindowsDirectoryW".to_string(),
+                passed: is_dir,
+                detail: format!(
+                    "{}（{}）",
+                    path.display(),
+                    if is_dir {
+                        "目录存在"
+                    } else {
+                        "目录不可访问"
+                    }
+                ),
+            });
+            Some(path)
+        }
+        Err(error) => {
+            checks.push(WindowsApiCheck {
+                name: "GetWindowsDirectoryW".to_string(),
+                passed: false,
+                detail: error.to_string(),
+            });
+            None
+        }
+    };
+
+    let system_dir = match system_directory() {
+        Ok(path) => {
+            let is_dir = is_directory(&path).unwrap_or(false);
+            checks.push(WindowsApiCheck {
+                name: "GetSystemDirectoryW".to_string(),
+                passed: is_dir,
+                detail: format!(
+                    "{}（{}）",
+                    path.display(),
+                    if is_dir {
+                        "目录存在"
+                    } else {
+                        "目录不可访问"
+                    }
+                ),
+            });
+            Some(path)
+        }
+        Err(error) => {
+            checks.push(WindowsApiCheck {
+                name: "GetSystemDirectoryW".to_string(),
+                passed: false,
+                detail: error.to_string(),
+            });
+            None
+        }
+    };
+
+    let mut probe_file = None;
+    match &windows_dir {
+        Some(directory) => {
+            // kernel32.dll 是每个 Windows 安装都存在的系统文件，适合做只读属性探测。
+            let candidate = directory.join("System32").join("kernel32.dll");
+            match file_attributes(&candidate) {
+                Ok(attributes) => {
+                    let passed = attributes & FILE_ATTRIBUTE_DIRECTORY == 0;
+                    checks.push(WindowsApiCheck {
+                        name: "GetFileAttributesW".to_string(),
+                        passed,
+                        detail: format!("{}（属性 0x{:08X}）", candidate.display(), attributes),
+                    });
+                    probe_file = Some(candidate);
+                }
+                Err(error) => {
+                    checks.push(WindowsApiCheck {
+                        name: "GetFileAttributesW".to_string(),
+                        passed: false,
+                        detail: error.to_string(),
+                    });
+                    probe_file = Some(candidate);
+                }
+            }
+        }
+        None => {
+            checks.push(WindowsApiCheck {
+                name: "GetFileAttributesW".to_string(),
+                passed: false,
+                detail: "无法取得 Windows 目录，已跳过文件属性探测".to_string(),
+            });
+        }
+    }
+
+    let ok = checks.iter().all(|check| check.passed);
+
+    WindowsProbeReport {
+        ok,
+        windows_directory: windows_dir.map(|path| path.to_string_lossy().into_owned()),
+        system_directory: system_dir.map(|path| path.to_string_lossy().into_owned()),
+        probe_file: probe_file.map(|path| path.to_string_lossy().into_owned()),
+        checks,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_directory_is_a_directory() {
+        let path = windows_directory().expect("GetWindowsDirectoryW 应成功");
+        assert!(path.is_absolute(), "Windows 目录应为绝对路径");
+        assert!(
+            is_directory(&path).expect("GetFileAttributesW 应成功"),
+            "Windows 目录应具有目录属性"
+        );
+    }
+
+    #[test]
+    fn system_directory_is_a_directory() {
+        let path = system_directory().expect("GetSystemDirectoryW 应成功");
+        assert!(
+            is_directory(&path).expect("GetFileAttributesW 应成功"),
+            "System32 目录应具有目录属性"
+        );
+    }
+
+    #[test]
+    fn missing_path_returns_error() {
+        let missing = windows_directory()
+            .expect("GetWindowsDirectoryW 应成功")
+            .join("__upsweep_stage0_missing_probe__");
+        assert!(
+            file_attributes(&missing).is_err(),
+            "不存在的路径不应返回有效属性"
+        );
+    }
+
+    #[test]
+    fn probe_passes_on_windows() {
+        let report = probe();
+        assert!(report.ok, "Windows API 探测应全部通过: {:?}", report.checks);
+        assert_eq!(report.checks.len(), 3);
+        assert!(report.windows_directory.is_some());
+        assert!(report.system_directory.is_some());
+        assert!(report.probe_file.is_some());
+    }
+}
